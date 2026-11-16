@@ -1,0 +1,55 @@
+// android/app/build.gradle
+// Bonyan OS — Android build configuration
+
+android {
+    namespace "sa.bonyan.app"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "sa.bonyan.app"
+        minSdk 23           // Firebase Auth + Agora minimum
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+        multiDexEnabled true
+    }
+
+    signingConfigs {
+        release {
+            // Set via environment variables in CI — NEVER commit keystore
+            storeFile file(System.getenv("KEYSTORE_PATH") ?: "keystore/bonyan.jks")
+            storePassword System.getenv("KEYSTORE_PASSWORD") ?: ""
+            keyAlias System.getenv("KEY_ALIAS") ?: "bonyan"
+            keyPassword System.getenv("KEY_PASSWORD") ?: ""
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+                          'proguard-rules.pro'
+        }
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+        }
+    }
+
+    // Split APKs by ABI for smaller download size
+    splits {
+        abi {
+            enable true
+            reset()
+            include "arm64-v8a", "armeabi-v7a", "x86_64"
+            universalApk true  // also generate a universal APK
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

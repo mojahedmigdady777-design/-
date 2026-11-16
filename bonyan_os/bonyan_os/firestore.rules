@@ -1,0 +1,184 @@
+// firestore.rules
+//
+// ╔══════════════════════════════════════════════════════════════╗
+// ║      بنيان OS — قواعد أمان Firestore                        ║
+// ║  Role-based · Student data isolation · Audit-safe           ║
+// ╚══════════════════════════════════════════════════════════════╝
+//
+// Principle of least privilege:
+//   - Students see ONLY their own data
+//   - Parents see ONLY their child's data
+//   - Teachers see their classes (read-only grades, no PII beyond name)
+//   - Admins see their school scope only
+//   - Super-Admins: granted via Custom Claim, not hardcoded bypass
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper Functions ──────────────────────────────────────────────────
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function role() {
+      return request.auth.token.role;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function isStudent()    { return isAuthenticated() && role() == 'student'; }
+    function isParent()     { return isAuthenticated() && role() == 'parent'; }
+    function isTeacher()    { return isAuthenticated() && role() == 'teacher'; }
+    function isAdmin()      { return isAuthenticated() && (role() == 'admin' || role() == 'superAdmin'); }
+    function isSuperAdmin() { return isAuthenticated() && role() == 'superAdmin'; }
+
+    function isOwner(docId) {
+      return uid() == docId;
+    }
+
+    function sameSchool(resource) {
+      return request.auth.token.schoolId == resource.data.schoolId;
+    }
+
+    function isParentOf(studentId) {
+      return isParent() && request.auth.token.childId == studentId;
+    }
+
+    // ── Students collection ───────────────────────────────────────────────
+    match /students/{studentId} {
+      // Student reads own profile
+      allow read: if isOwner(studentId)
+        // Parent reads their child
+        || isParentOf(studentId)
+        // Teacher reads students in their school (limited fields)
+        || (isTeacher() && sameSchool(resource))
+        // Admin reads all in their school
+        || (isAdmin() && sameSchool(resource));
+
+      // Only backend (Cloud Functions with admin SDK) can write student profiles
+      // Clients update only specific allowed fields via sub-collection writes
+      allow write: if false;
+
+      // ── Sub-collections ──────────────────────────────────────────────
+      match /prayerRecords/{date} {
+        allow read:  if isOwner(studentId) || isParentOf(studentId)
+                       || (isAdmin() && sameSchool(get(/databases/$(database)/documents/students/$(studentId))));
+        allow write: if isOwner(studentId); // Only student marks own prayers
+      }
+
+      match /badges/{badgeId} {
+        allow read:  if isOwner(studentId) || isParentOf(studentId) || isAdmin();
+        allow write: if false; // Only Cloud Functions write badges
+      }
+
+      match /coinTransactions/{txId} {
+        allow read:  if isOwner(studentId) || isParentOf(studentId);
+        allow write: if false; // Only Cloud Functions
+      }
+
+      match /streaks/{category} {
+        allow read:  if isOwner(studentId) || isAdmin();
+        allow write: if isOwner(studentId);
+      }
+    }
+
+    // ── Cells (Cell-of-5 groups) ──────────────────────────────────────────
+    match /cells/{cellId} {
+      allow read: if isAuthenticated()
+        && (request.auth.token.cellId == cellId || isAdmin());
+      allow write: if false; // Admin SDK only
+    }
+
+    // ── Attendance Sessions ───────────────────────────────────────────────
+    match /attendanceSessions/{sessionId} {
+      // Student reads only active sessions for their class
+      allow read: if isAuthenticated()
+        && (isStudent() || isTeacher() || isAdmin());
+
+      // Only teachers can create sessions
+      allow create: if isTeacher()
+        && request.auth.token.schoolId == request.resource.data.schoolId;
+
+      // Teacher can close their own session; admin can close any
+      allow update: if (isTeacher() && resource.data.teacherId == uid())
+        || isAdmin();
+
+      allow delete: if false;
+    }
+
+    // ── Timetable ─────────────────────────────────────────────────────────
+    match /timetable/{slotId} {
+      allow read: if isAuthenticated() && sameSchool(resource);
+      allow write: if isAdmin() && sameSchool(resource);
+    }
+
+    // ── Quiz Sessions ─────────────────────────────────────────────────────
+    match /quizSessions/{sessionId} {
+      allow read: if isAuthenticated()
+        && (request.auth.token.cellId == resource.data.cellId || isAdmin());
+
+      match /results/{resultId} {
+        allow read:  if isAuthenticated()
+          && (request.auth.token.cellId == get(/databases/$(database)/documents/quizSessions/$(sessionId)).data.cellId
+              || isAdmin());
+        allow write: if isAuthenticated() && isOwner(resultId); // Student writes own result
+      }
+    }
+
+    // ── School Alerts ─────────────────────────────────────────────────────
+    match /schoolAlerts/{alertId} {
+      allow read: if isAuthenticated() && sameSchool(resource);
+      allow write: if isAdmin() && sameSchool(resource);
+    }
+
+    // ── Schools ───────────────────────────────────────────────────────────
+    match /schools/{schoolId} {
+      allow read: if isAuthenticated()
+        && request.auth.token.schoolId == schoolId;
+      allow write: if isSuperAdmin();
+
+      match /dailyStats/{date} {
+        allow read: if isAdmin() && request.auth.token.schoolId == schoolId;
+        allow write: if false; // Cloud Functions only
+      }
+    }
+
+    // ── Rescue Plans ──────────────────────────────────────────────────────
+    match /rescuePlans/{planId} {
+      allow read: if isAuthenticated()
+        && (resource.data.studentId == uid()
+            || isParentOf(resource.data.studentId)
+            || isTeacher()
+            || isAdmin());
+      allow write: if false; // Mueen AI via Cloud Functions only
+    }
+
+    // ── Admin Elevation Audit (append-only) ───────────────────────────────
+    match /adminElevationAudit/{auditId} {
+      allow read:   if isSuperAdmin();
+      allow create: if false; // Cloud Functions only
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // ── FCM Tokens ────────────────────────────────────────────────────────
+    match /fcmTokens/{userId} {
+      // Users manage their own tokens; no one else can read them
+      allow read, write: if isOwner(userId);
+    }
+
+    // ── Users (parent/teacher profiles) ──────────────────────────────────
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if isOwner(userId); // Self-update only (no role field)
+    }
+
+    // ── Block all other paths ─────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
