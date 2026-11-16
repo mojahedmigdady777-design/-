@@ -1,8 +1,13 @@
-name: Build Flutter App and Web
+name: Build Flutter App and Deploy Web
 
 on:
   push:
     branches: [ main ]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -25,10 +30,30 @@ jobs:
       - name: Build APK
         run: flutter build apk --release
 
-      - name: Upload Artifacts
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flutter-builds
-          path: |
-            build/app/outputs/flutter-apk/app-release.apk
-            build/web/
+          name: app-release
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.deployment_link }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
