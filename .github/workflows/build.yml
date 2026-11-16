@@ -12,10 +12,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # هنا أخبرنا النظام أن يعمل داخل مجلد مشروعك الموجود على جيت هاب
     defaults:
       run:
-        working-directory: ./bonyan_os
+        working-directory: ./bonyan_os/bonyan_os
 
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +38,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: app-release
-          path: bonyan_os/build/app/outputs/flutter-apk/app-release.apk
+          path: bonyan_os/bonyan_os/build/app/outputs/flutter-apk/app-release.apk
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -47,7 +46,7 @@ jobs:
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: bonyan_os/build/web
+          path: bonyan_os/bonyan_os/build/web
 
   deploy:
     needs: build
